@@ -212,3 +212,218 @@
 
 ## 貢獻與回饋
 如有問題或建議，請提供日誌輸出或錯誤訊息，我們會盡快協助。你也可以提交 Pull Request 參與開發！
+
+# Discord Bot README
+
+This is a multifunctional Discord bot developed using Python and the Discord.py framework, featuring various Cog modules for live notifications, games, leveling systems, voting, welcome messages, YouTube notifications, moderation, and more. It is designed to be developed in a Windows environment (based on your AMD R7 9700X, RTX 4070, and 32GB DDR5 specifications). Below are usage examples and instructions.
+
+## Prerequisites
+- Python 3.8+
+- Install dependencies:
+  ```bash
+  pip install discord.py aiohttp matplotlib numpy sqlite3 python-dotenv google-api-python-client
+  ```
+- Environment variable setup (using a `.env` file):
+  - `DISCORD_TOKEN`: Discord Bot Token
+  - `WEATHER_API_KEY`: OpenWeatherMap API Key (currently unavailable due to connection issues)
+  - `YT_API_KEY`: YouTube API Key
+  - `REDDIT_CLIENT_ID`: Reddit API Client ID
+  - `REDDIT_CLIENT_SECRET`: Reddit API Client Secret
+
+## Installation and Running
+1. Clone the code to your local machine:
+   ```bash
+   git clone <your repository URL>
+   cd <project directory>
+   ```
+2. Create a `bot_data.db` database file in the project directory.
+3. Create a `.env` file and fill in the environment variables listed above.
+4. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+5. Run the bot:
+   ```bash
+   python main.py
+   ```
+   (Assuming the main program is `main.py` and all Cogs are loaded correctly)
+
+## Usage Examples
+The bot provides commands across multiple modules, with some requiring specific permissions. Below are examples for each module:
+
+### General Cog
+- **Test Latency**:
+  ```
+  !ping
+  ```
+  - Response: `Ping! Latency: XXms`
+- **View Help**:
+  ```
+  !myhelp
+  ```
+  - Displays a list of commands for all modules.
+- **User Information**:
+  ```
+  !userinfo @User
+  ```
+  - Shows details like join date and roles for the specified user (defaults to self).
+- **Server Information**:
+  ```
+  !serverinfo
+  ```
+  - Displays server name, owner, member count, etc.
+
+### Game Cog
+- **Start Number Guessing Game**:
+  ```
+  !game start
+  ```
+  - Response: `✅ Game started! Guess a number between 1-100, you have 5 attempts.`
+- **Guess a Number**:
+  ```
+  !game guess 50
+  ```
+  - Provides feedback (too high/too low/correct).
+- **End Game**:
+  ```
+  !game end
+  ```
+  - Response: `✅ Game ended, the number was XX.`
+- **View Leaderboard**:
+  ```
+  !game leaderboard
+  ```
+  - Shows the top 10 scores for the guessing game.
+- **Get a Meme**:
+  ```
+  !meme reddit
+  ```
+  - Fetches a meme from Reddit (optional `memeapi` source).
+
+### Level Cog
+- **Check Level**:
+  ```
+  !level
+  ```
+  - Displays your level, XP progress, etc.
+- **View Leaderboard**:
+  ```
+  !leaderboard
+  ```
+  - Shows the level leaderboard (paginated).
+- **Configure Level System** (Requires Manage Guild Permission):
+  ```
+  !levelconfig channel #level-up
+  ```
+  - Sets the channel for level-up notifications.
+
+### Vote Cog
+- **Create a Poll** (Slash Command):
+  ```
+  /createpoll "Which drink do you like?" coffee|tea|water
+  ```
+  - Creates a poll with interactive buttons.
+- **View Poll Results**:
+  ```
+  /pollresult <poll_id>
+  ```
+  - Displays a chart of poll results.
+- **List Active Polls**:
+  ```
+  /listpolls
+  ```
+  - Lists all active polls.
+- **Traditional Poll Command**:
+  ```
+  !poll "Which drink do you like?" coffee|tea|water
+  ```
+  - Creates a poll in traditional command format.
+
+### WeatherCog
+- **Note**: The WeatherAPI is currently unavailable due to connection issues, and commands like `!getweather` are temporarily non-functional. We are actively working on resolving this issue, so stay tuned for updates.
+- **Set Weather Channel** (Requires Manage Guild Permission):
+  ```
+  !setweatherchannel #weather Taipei,Tokyo
+  ```
+  - Sets the weather notification channel and cities (comma-separated).
+
+### ModerationCog
+- **Create Role**:
+  ```
+  !addrole Moderator
+  ```
+  - Creates a role named `Moderator`.
+- **Assign Role**:
+  ```
+  !assignrole @User Moderator
+  ```
+  - Assigns the `Moderator` role to the specified user.
+- **Clear Messages**:
+  ```
+  !clear 10
+  ```
+  - Deletes the last 10 messages.
+
+### Welcome Cog
+- **Set Welcome Channel**:
+  ```
+  !welcome channel #welcome
+  ```
+  - Sets the channel for welcome messages.
+- **Set Auto Role**:
+  ```
+  !welcome role @Member
+  ```
+  - Automatically assigns the `Member` role to new members.
+- **Test Welcome Message**:
+  ```
+  !welcome test
+  ```
+  - Sends a test welcome message to the designated channel.
+
+### YTNotificationCog
+- **Set YouTube Notification**:
+  ```
+  !setytchannels #youtube UC123 UC456
+  ```
+  - Sets the notification channel and tracks YouTube channel IDs.
+- **List Tracked Channels**:
+  ```
+  !listytchannels
+  ```
+  - Displays currently tracked YouTube channels.
+
+### Twitch Cog
+- **View System Status**:
+  ```
+  !twitch
+  ```
+  - Shows system status, API status, notification channel, etc.
+- **Set API Key**:
+  ```
+  !twitch setkey <Client_ID> <Client_Secret>
+  ```
+  - Sets Twitch API keys (run in a private channel to avoid exposing keys).
+- **Add Streamer**:
+  ```
+  !twitch add streamer123 @StreamerRole
+  ```
+  - Adds a streamer and specifies a mention role.
+- **Test Notification**:
+  ```
+  !twitch test streamer123
+  ```
+  - Tests a notification for the specified streamer.
+
+## Important Notes
+- **Permission Requirements**: Some commands require admin permissions; ensure the bot has sufficient Discord permissions.
+- **Database Path**: Ensure `bot_data.db` is in the project directory.
+- **WeatherAPI Issue**: Currently non-functional due to connection problems.
+
+## Deployment and Testing
+- **Local Testing**: Run `python main.py` and test commands in your Discord server.
+- **Remote Deployment**: Upload to a server (e.g., AWS EC2), sync `bot_data.db`, and monitor logs.
+- **Feedback**: If a command fails, check the logs and provide error messages for assistance.
+
+## Contribution and Feedback
+If you encounter issues or have suggestions, please provide log outputs or error messages, and we’ll assist you promptly. Feel free to submit Pull Requests to contribute to the development!
