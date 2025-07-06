@@ -1,6 +1,6 @@
 # Discord 機器人 README
 
-這是一個使用 Python 和 Discord.py 框架開發的多功能 Discord 機器人，包含多個 Cog 模組，提供直播通知、遊戲、等級系統、投票、歡迎訊息、YouTube 通知、管理功能等功能。以下是使用範例與說明，適合在 Windows 環境下開發（基於你的 AMD R7 9700X、RTX 4070、32GB DDR5 規格）。
+這是一個使用 Python 和 Discord.py 框架開發的多功能 Discord 機器人，包含多個 Cog 模組，提供直播通知、遊戲、等級系統、投票、歡迎訊息、YouTube 通知、管理功能等功能。以下是使用範例與說明，適合在 Windows 環境下開發。
 
 ## 必要條件
 - Python 3.8+
@@ -215,7 +215,7 @@
 
 # Discord Bot README
 
-This is a multifunctional Discord bot developed using Python and the Discord.py framework, featuring various Cog modules for live notifications, games, leveling systems, voting, welcome messages, YouTube notifications, moderation, and more. It is designed to be developed in a Windows environment (based on your AMD R7 9700X, RTX 4070, and 32GB DDR5 specifications). Below are usage examples and instructions.
+This is a multifunctional Discord bot developed using Python and the Discord.py framework, featuring various Cog modules for live notifications, games, leveling systems, voting, welcome messages, YouTube notifications, moderation, and more. It is designed to be developed in a Windows environment . Below are usage examples and instructions.
 
 ## Prerequisites
 - Python 3.8+
