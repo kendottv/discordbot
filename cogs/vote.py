@@ -6,14 +6,11 @@ import numpy as np
 import io
 import asyncio
 from datetime import datetime
-import json
+import sqlite3
 
 # 設置中文字體
 plt.rcParams['font.sans-serif'] = ['Microsoft YaHei', 'SimHei', 'Arial Unicode MS', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
-
-# 儲存投票資料
-polls = {}
 
 class PollView(discord.ui.View):
     def __init__(self, poll_id):
@@ -21,7 +18,7 @@ class PollView(discord.ui.View):
         self.poll_id = poll_id
         
         # 動態添加投票按鈕
-        poll = polls.get(poll_id)
+        poll = get_poll(poll_id)
         if poll:
             emojis = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟']
             
@@ -33,7 +30,7 @@ class PollView(discord.ui.View):
     async def show_results(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         
-        poll = polls.get(self.poll_id)
+        poll = get_poll(self.poll_id)
         if not poll:
             await interaction.followup.send("❌ 找不到該投票！", ephemeral=True)
             return
@@ -48,7 +45,7 @@ class PollView(discord.ui.View):
     
     @discord.ui.button(label='結束投票', style=discord.ButtonStyle.danger, emoji='🔒')
     async def close_poll(self, interaction: discord.Interaction, button: discord.ui.Button):
-        poll = polls.get(self.poll_id)
+        poll = get_poll(self.poll_id)
         if not poll:
             await interaction.response.send_message("❌ 找不到該投票！", ephemeral=True)
             return
@@ -58,6 +55,7 @@ class PollView(discord.ui.View):
             return
         
         poll['active'] = False
+        save_poll(poll)
         
         embed = create_poll_embed(poll)
         embed.title = "🔒 投票已結束"
@@ -83,7 +81,7 @@ class VoteButton(discord.ui.Button):
         self.option_index = option_index
     
     async def callback(self, interaction: discord.Interaction):
-        poll = polls.get(self.poll_id)
+        poll = get_poll(self.poll_id)
         if not poll:
             await interaction.response.send_message("❌ 投票已不存在！", ephemeral=True)
             return
@@ -100,6 +98,7 @@ class VoteButton(discord.ui.Button):
         # 記錄投票
         poll['options'][self.option_index]['votes'] += 1
         poll['voters'].add(user_id)
+        save_poll(poll)
         
         # 更新嵌入消息
         embed = create_poll_embed(poll)
@@ -191,9 +190,37 @@ async def create_vote_chart(poll):
     
     return buffer
 
+def get_poll(poll_id):
+    """從資料庫獲取投票資料"""
+    cursor = connection.cursor()
+    cursor.execute("SELECT data FROM polls WHERE poll_id = ?", (poll_id,))
+    result = cursor.fetchone()
+    connection.close()
+    if result:
+        return eval(result[0])  # 假設資料儲存為 JSON 字串，使用 eval 解析
+    return None
+
+def save_poll(poll):
+    """將投票資料保存到資料庫"""
+    cursor = connection.cursor()
+    cursor.execute("INSERT OR REPLACE INTO polls (poll_id, data) VALUES (?, ?)", 
+                  (poll['id'], str(poll)))
+    connection.commit()
+    connection.close()
+
 class Vote(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        global connection
+        connection = sqlite3.connect("bot_data.db", check_same_thread=False)
+        cursor = connection.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS polls (
+                poll_id TEXT PRIMARY KEY,
+                data TEXT
+            )
+        """)
+        connection.commit()
     
     @commands.Cog.listener()
     async def on_ready(self):
@@ -226,7 +253,7 @@ class Vote(commands.Cog):
             'active': True
         }
         
-        polls[poll_id] = poll
+        save_poll(poll)
         
         embed = create_poll_embed(poll)
         view = PollView(poll_id)
@@ -236,7 +263,7 @@ class Vote(commands.Cog):
     @discord.app_commands.command(name="pollresult", description="查看投票結果圖表")
     @discord.app_commands.describe(poll_id="投票 ID")
     async def poll_result(self, interaction: discord.Interaction, poll_id: str):
-        poll = polls.get(poll_id)
+        poll = get_poll(poll_id)
         if not poll:
             await interaction.response.send_message("❌ 找不到該投票！", ephemeral=True)
             return
@@ -253,7 +280,12 @@ class Vote(commands.Cog):
     
     @discord.app_commands.command(name="listpolls", description="列出所有活躍的投票")
     async def list_polls(self, interaction: discord.Interaction):
-        active_polls = [poll for poll in polls.values() if poll['active']]
+        cursor = connection.cursor()
+        cursor.execute("SELECT data FROM polls WHERE 1=1")
+        results = cursor.fetchall()
+        connection.close()
+        
+        active_polls = [eval(result[0]) for result in results if eval(result[0])['active']]
         
         if not active_polls:
             await interaction.response.send_message("目前沒有活躍的投票。", ephemeral=True)
@@ -274,7 +306,7 @@ class Vote(commands.Cog):
     @discord.app_commands.command(name="deletepoll", description="刪除投票 (僅創建者)")
     @discord.app_commands.describe(poll_id="投票 ID")
     async def delete_poll(self, interaction: discord.Interaction, poll_id: str):
-        poll = polls.get(poll_id)
+        poll = get_poll(poll_id)
         if not poll:
             await interaction.response.send_message("❌ 找不到該投票！", ephemeral=True)
             return
@@ -283,7 +315,11 @@ class Vote(commands.Cog):
             await interaction.response.send_message("❌ 只有投票創建者可以刪除投票！", ephemeral=True)
             return
         
-        del polls[poll_id]
+        cursor = connection.cursor()
+        cursor.execute("DELETE FROM polls WHERE poll_id = ?", (poll_id,))
+        connection.commit()
+        connection.close()
+        
         await interaction.response.send_message(f"✅ 投票 {poll_id} 已被刪除！", ephemeral=True)
     
     # 傳統命令支援 (可選)
@@ -311,12 +347,16 @@ class Vote(commands.Cog):
             'active': True
         }
         
-        polls[poll_id] = poll
+        save_poll(poll)
         
         embed = create_poll_embed(poll)
         view = PollView(poll_id)
         
         await ctx.send(embed=embed, view=view)
+
+    def __del__(self):
+        """銷毀實例時關閉資料庫連線"""
+        connection.close()
 
 # 必須的 setup 函數
 async def setup(bot):

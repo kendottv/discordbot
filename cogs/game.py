@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands
-import json
 import os
 import random
 import logging
@@ -8,6 +7,7 @@ import requests
 import aiohttp
 import asyncio
 from datetime import datetime, timedelta
+import sqlite3
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
@@ -15,8 +15,16 @@ logger = logging.getLogger(__name__)
 class Game(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.game_file = "data/game_data.json"
-        self.game_data = self.load_game_data()
+        self.db = sqlite3.connect("bot_data.db", check_same_thread=False)
+        self.cursor = self.db.cursor()
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS game_scores (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                score INTEGER DEFAULT 0
+            )
+        """)
+        self.db.commit()
         self.active_game = False
         self.target_number = None
         self.max_guesses = 5
@@ -26,20 +34,16 @@ class Game(commands.Cog):
         self.token_expires_at = None
         self.current_command = None
 
-    def load_game_data(self):
-        os.makedirs("data", exist_ok=True)
-        try:
-            with open(self.game_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {"scores": {}, "active_game": False}
-        except json.JSONDecodeError as e:
-            logger.error(f"遊戲資料解析失敗: {e}")
-            return {"scores": {}, "active_game": False}
+    def get_score(self, user_id):
+        self.cursor.execute("SELECT score FROM game_scores WHERE user_id = ?", (user_id,))
+        result = self.cursor.fetchone()
+        return result[0] if result else 0
 
-    def save_game_data(self):
-        with open(self.game_file, 'w', encoding='utf-8') as f:
-            json.dump(self.game_data, f, ensure_ascii=False, indent=2)
+    def save_score(self, user_id, score):
+        username = str(self.bot.get_user(user_id) or "Unknown")
+        self.cursor.execute("INSERT OR REPLACE INTO game_scores (user_id, username, score) VALUES (?, ?, ?)",
+                           (user_id, username, score))
+        self.db.commit()
 
     async def get_reddit_token(self, max_attempts=3, attempt=1):
         logger.debug(f"嘗試獲取 Reddit Token，次數: {attempt}/{max_attempts}")
@@ -202,10 +206,10 @@ class Game(commands.Cog):
         
         if number == self.target_number:
             score = self.max_guesses - self.guesses_left + 1
-            user_id = str(ctx.author.id)
-            self.game_data["scores"][user_id] = max(self.game_data["scores"].get(user_id, 0), score)
-            self.save_game_data()
-            await ctx.send(f"✅ 恭喜 {ctx.author.name} 猜對了！得分：{score}，最高分：{self.game_data['scores'][user_id]}")
+            current_score = self.get_score(ctx.author.id)
+            new_score = max(current_score, score)
+            self.save_score(ctx.author.id, new_score)
+            await ctx.send(f"✅ 恭喜 {ctx.author.name} 猜對了！得分：{score}，最高分：{new_score}")
             self.active_game = False
         elif number < self.target_number:
             await ctx.send(f"⬆️ 太小了！剩餘 {self.guesses_left} 次機會。")
@@ -227,19 +231,19 @@ class Game(commands.Cog):
 
     @game.command(name="leaderboard")
     async def show_leaderboard(self, ctx):
-        if not self.game_data.get("scores", {}):
+        self.cursor.execute("SELECT user_id, username, score FROM game_scores ORDER BY score DESC LIMIT 10")
+        scores = self.cursor.fetchall()
+        if not scores:
             await ctx.send("❌ 目前無得分記錄。")
             return
         
         embed = discord.Embed(title="🏆 得分排行", color=discord.Color.gold())
-        sorted_scores = sorted(self.game_data["scores"].items(), key=lambda x: x[1], reverse=True)[:10]
-        
-        for user_id, score in sorted_scores:
+        for user_id, username, score in scores:
             try:
-                user = await self.bot.fetch_user(int(user_id))
+                user = await self.bot.fetch_user(user_id)
                 embed.add_field(name=user.name, value=f"{score} 分", inline=False)
             except:
-                embed.add_field(name=f"未知用戶 ({user_id})", value=f"{score} 分", inline=False)
+                embed.add_field(name=f"未知用戶 ({username})", value=f"{score} 分", inline=False)
         
         await ctx.send(embed=embed)
 
@@ -279,6 +283,9 @@ class Game(commands.Cog):
         except Exception as e:
             logger.error(f"執行 !meme 時發生錯誤: {e}")
             await ctx.send(f"❌ 獲取迷因時發生錯誤: {str(e)}")
+
+    def __del__(self):
+        self.db.close()
 
 async def setup(bot):
     await bot.add_cog(Game(bot))

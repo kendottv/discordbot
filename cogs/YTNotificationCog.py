@@ -1,11 +1,11 @@
 import os
-import json
-from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
-from dotenv import load_dotenv
 import discord
 from discord.ext import commands, tasks
 from datetime import datetime
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from dotenv import load_dotenv
+import sqlite3
 
 # 載入環境變數
 load_dotenv()
@@ -14,37 +14,42 @@ class YTNotificationCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.api_key = os.getenv("YT_API_KEY")
-        self.data_file = "data/yt_data.json"  # 獨立資料文件
-        self.yt_data = self.load_yt_data()
+        if not self.api_key:
+            print("❌ 缺少 YT_API_KEY，YouTube 通知功能將無法工作！")
+        
+        self.db = sqlite3.connect("bot_data.db", check_same_thread=False)
+        self.cursor = self.db.cursor()
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS yt_config (
+                guild_id INTEGER PRIMARY KEY,
+                discord_channel_id INTEGER,
+                channel_ids TEXT
+            )
+        """)
+        self.db.commit()
+        
         self.last_video_ids = {}  # 儲存每個頻道的最新影片 ID
         self.channel_names = {}  # 儲存頻道名稱快取
         self.check_new_videos.start()
 
-    def load_yt_data(self):
-        os.makedirs("data", exist_ok=True)
-        try:
-            with open(self.data_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                # 載入最後的影片ID記錄
-                self.last_video_ids = data.get("last_video_ids", {})
-                return data.get("settings", {})
-        except FileNotFoundError:
-            print("YouTube 資料文件未找到，創建新文件")
-            return {}
-        except json.JSONDecodeError as e:
-            print(f"YouTube 資料解析失敗: {e}")
-            return {}
-
-    def save_yt_data(self):
-        try:
-            data = {
-                "settings": self.yt_data,
-                "last_video_ids": self.last_video_ids
+    def get_yt_config(self, guild_id):
+        """獲取 YouTube 通知設定"""
+        self.cursor.execute("SELECT * FROM yt_config WHERE guild_id = ?", (guild_id,))
+        result = self.cursor.fetchone()
+        if result:
+            return {
+                "discord_channel_id": result[1],
+                "channel_ids": eval(result[2]) if result[2] else []
             }
-            with open(self.data_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"儲存 YouTube 資料失敗: {e}")
+        return None
+
+    def save_yt_config(self, guild_id, data):
+        """儲存 YouTube 通知設定"""
+        self.cursor.execute("""
+            INSERT OR REPLACE INTO yt_config (guild_id, discord_channel_id, channel_ids)
+            VALUES (?, ?, ?)
+        """, (guild_id, data["discord_channel_id"], str(data["channel_ids"])))
+        self.db.commit()
 
     async def get_channel_name(self, channel_id):
         """取得頻道名稱並快取"""
@@ -77,7 +82,9 @@ class YTNotificationCog(commands.Cog):
             return
         
         youtube = build("youtube", "v3", developerKey=self.api_key)
-        for guild_id, data in self.yt_data.items():
+        guild_ids = [row[0] for row in self.cursor.execute("SELECT guild_id FROM yt_config")]
+        for guild_id in guild_ids:
+            data = self.get_yt_config(guild_id)
             discord_channel_id = data.get("discord_channel_id")
             channel_ids = data.get("channel_ids", [])
             if not discord_channel_id or not channel_ids:
@@ -111,7 +118,6 @@ class YTNotificationCog(commands.Cog):
                             if channel_id not in self.last_video_ids:
                                 print(f"初始化頻道 {channel_name} 的最新影片: {title}")
                                 self.last_video_ids[channel_id] = video_id
-                                self.save_yt_data()  # 保存到文件
                                 continue
                             
                             # 檢查影片是否真的是最近發布的（避免舊影片被誤判為新影片）
@@ -123,7 +129,6 @@ class YTNotificationCog(commands.Cog):
                                 if time_diff.days > 1:
                                     print(f"影片 {title} 發布超過 24 小時，跳過通知")
                                     self.last_video_ids[channel_id] = video_id
-                                    self.save_yt_data()  # 保存到文件
                                     continue
                                     
                             except Exception as e:
@@ -168,7 +173,6 @@ class YTNotificationCog(commands.Cog):
                                 print(f"✅ 已發送 {channel_name} 的新影片通知: {title}")
                                 
                             self.last_video_ids[channel_id] = video_id
-                            self.save_yt_data()  # 保存到文件
                     else:
                         print(f"未找到頻道 {channel_id} 的影片資料")
             except HttpError as e:
@@ -190,7 +194,7 @@ class YTNotificationCog(commands.Cog):
             await ctx.send("❌ 請提供至少一個 YouTube 頻道 ID！")
             return
 
-        guild_id = str(ctx.guild.id)
+        guild_id = ctx.guild.id
         
         # 驗證頻道ID並取得名稱
         valid_channels = []
@@ -205,11 +209,10 @@ class YTNotificationCog(commands.Cog):
                 await ctx.send(f"⚠️ 頻道 ID `{channel_id}` 可能無效，請確認後再試")
                 return
         
-        self.yt_data[guild_id] = {
-            "discord_channel_id": str(channel.id),
+        self.save_yt_config(guild_id, {
+            "discord_channel_id": channel.id,
             "channel_ids": valid_channels
-        }
-        self.save_yt_data()
+        })
         
         channel_list = '\n'.join([f"• {name}" for name in channel_names])
         await ctx.send(
@@ -221,13 +224,13 @@ class YTNotificationCog(commands.Cog):
     @commands.has_permissions(administrator=True)
     async def list_yt_channels(self, ctx):
         """列出目前追蹤的 YouTube 頻道"""
-        guild_id = str(ctx.guild.id)
+        guild_id = ctx.guild.id
         
-        if guild_id not in self.yt_data:
+        if not self.get_yt_config(guild_id):
             await ctx.send("❌ 此伺服器尚未設定 YouTube 通知！")
             return
         
-        data = self.yt_data[guild_id]
+        data = self.get_yt_config(guild_id)
         channel_ids = data.get("channel_ids", [])
         discord_channel_id = data.get("discord_channel_id")
         
@@ -253,6 +256,10 @@ class YTNotificationCog(commands.Cog):
 
     def cog_unload(self):
         self.check_new_videos.cancel()
+
+    def __del__(self):
+        """銷毀實例時關閉資料庫連線"""
+        self.db.close()
 
 async def setup(bot):
     await bot.add_cog(YTNotificationCog(bot))

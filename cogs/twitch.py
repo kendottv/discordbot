@@ -2,10 +2,12 @@ import discord
 from discord.ext import commands, tasks
 import json
 import os
+import sqlite3
 import aiohttp
 import asyncio
 from datetime import datetime, timedelta
 import logging
+
 # 設定日誌
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -13,75 +15,207 @@ logger = logging.getLogger(__name__)
 class Twitch(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.config_file = "config/twitch_config.json"
-        self.data_file = "data/twitch_data.json"
+        self.db_file = "bot_data.db"
+        self.guild_id = 1130523145313456268  # 你的伺服器 ID
         self.config = self.load_config()
-        self.stream_data = self.load_stream_data()
         self.twitch_token = None
         self.token_expires_at = None
         self.headers = {}
+        self.stream_data = {}
         
-        # 確保所有追蹤的實況主在 stream_data 中有記錄
-        for username in self.config.get("streamers", {}).keys():
-            if username not in self.stream_data:
-                self.stream_data[username] = {"is_live": False, "last_checked": datetime.now().isoformat()}
-        self.save_stream_data()
+        # 確保所有追蹤的實況主在資料庫中有記錄
+        self.ensure_streamers_in_db()
         
         # 啟動定時檢查
         if self.config.get("enabled", False):
             self.check_streams.start()
 
+    def get_db_connection(self):
+        """取得資料庫連線"""
+        return sqlite3.connect(self.db_file)
+
     def load_config(self):
-        """載入 Twitch 設定"""
-        os.makedirs("config", exist_ok=True)
-        default_config = {
-            "enabled": False,
-            "client_id": "",
-            "client_secret": "",
-            "notification_channel": None,
-            "check_interval": 60,
-            "streamers": {},
-            "default_message": "🔴 **{streamer}** 正在直播！\n\n**{title}**\n分類：{category}\n觀看人數：{viewers}\n\n🎮 立即觀看：https://twitch.tv/{username}",
-            "mention_everyone": False,
-            "mention_role": None
-        }
+        """從資料庫載入 Twitch 設定"""
+        try:
+            with self.get_db_connection() as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    SELECT enabled, client_id, client_secret, notification_channel, 
+                           check_interval, default_message, mention_everyone, mention_role
+                    FROM twitch_config WHERE guild_id = ?
+                """, (self.guild_id,))
+                
+                result = cursor.fetchone()
+                if result:
+                    return {
+                        "enabled": bool(result[0]),
+                        "client_id": result[1] or "",
+                        "client_secret": result[2] or "",
+                        "notification_channel": result[3],
+                        "check_interval": result[4] or 60,
+                        "default_message": result[5] or "🔴 **{streamer}** 正在直播！\n\n**{title}**\n分類：{category}\n觀看人數：{viewers}\n\n🎮 立即觀看：https://twitch.tv/{username}",
+                        "mention_everyone": bool(result[6]),
+                        "mention_role": result[7]
+                    }
+                else:
+                    # 如果沒有設定，創建預設值
+                    default_config = {
+                        "enabled": False,
+                        "client_id": "",
+                        "client_secret": "",
+                        "notification_channel": None,
+                        "check_interval": 60,
+                        "default_message": "🔴 **{streamer}** 正在直播！\n\n**{title}**\n分類：{category}\n觀看人數：{viewers}\n\n🎮 立即觀看：https://twitch.tv/{username}",
+                        "mention_everyone": False,
+                        "mention_role": None
+                    }
+                    self.save_config(default_config)
+                    return default_config
+        except Exception as e:
+            logger.error(f"載入設定時發生錯誤: {e}")
+            return {
+                "enabled": False,
+                "client_id": "",
+                "client_secret": "",
+                "notification_channel": None,
+                "check_interval": 60,
+                "default_message": "🔴 **{streamer}** 正在直播！\n\n**{title}**\n分類：{category}\n觀看人數：{viewers}\n\n🎮 立即觀看：https://twitch.tv/{username}",
+                "mention_everyone": False,
+                "mention_role": None
+            }
+
+    def save_config(self, config=None):
+        """儲存 Twitch 設定到資料庫"""
+        if config is None:
+            config = self.config
         
         try:
-            with open(self.config_file, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-            for key, value in default_config.items():
-                if key not in config:
-                    config[key] = value
-            return config
-        except FileNotFoundError:
-            with open(self.config_file, 'w', encoding='utf-8') as f:
-                json.dump(default_config, f, ensure_ascii=False, indent=2)
-            return default_config
-        except json.JSONDecodeError as e:
-            logger.error(f"配置檔案解析失敗: {e}")
-            return default_config
+            with self.get_db_connection() as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO twitch_config 
+                    (guild_id, enabled, client_id, client_secret, notification_channel, 
+                     check_interval, default_message, mention_everyone, mention_role)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    self.guild_id,
+                    1 if config.get("enabled") else 0,
+                    config.get("client_id"),
+                    config.get("client_secret"),
+                    config.get("notification_channel"),
+                    config.get("check_interval", 60),
+                    config.get("default_message"),
+                    1 if config.get("mention_everyone") else 0,
+                    config.get("mention_role")
+                ))
+                db.commit()
+        except Exception as e:
+            logger.error(f"儲存設定時發生錯誤: {e}")
 
-    def save_config(self):
-        """儲存 Twitch 設定"""
-        with open(self.config_file, 'w', encoding='utf-8') as f:
-            json.dump(self.config, f, ensure_ascii=False, indent=2)
-
-    def load_stream_data(self):
-        """載入直播狀態資料"""
-        os.makedirs("data", exist_ok=True)
+    def get_streamers(self):
+        """從資料庫取得所有實況主"""
         try:
-            with open(self.data_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {}
-        except json.JSONDecodeError as e:
-            logger.error(f"直播狀態資料解析失敗: {e}")
+            with self.get_db_connection() as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    SELECT username, discord_role, custom_message, is_live, stream_id, last_checked
+                    FROM twitch_streamers WHERE guild_id = ?
+                """, (self.guild_id,))
+                
+                streamers = {}
+                for row in cursor.fetchall():
+                    streamers[row[0]] = {
+                        "discord_role": row[1],
+                        "custom_message": row[2],
+                        "is_live": bool(row[3]),
+                        "stream_id": row[4],
+                        "last_checked": row[5]
+                    }
+                return streamers
+        except Exception as e:
+            logger.error(f"取得實況主列表時發生錯誤: {e}")
             return {}
 
-    def save_stream_data(self):
-        """儲存直播狀態資料"""
-        with open(self.data_file, 'w', encoding='utf-8') as f:
-            json.dump(self.stream_data, f, ensure_ascii=False, indent=2)
+    def get_streamer_data(self, username):
+        """取得特定實況主的資料"""
+        try:
+            with self.get_db_connection() as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    SELECT discord_role, custom_message, is_live, stream_id, last_checked
+                    FROM twitch_streamers WHERE username = ? AND guild_id = ?
+                """, (username, self.guild_id))
+                
+                result = cursor.fetchone()
+                if result:
+                    return {
+                        "discord_role": result[0],
+                        "custom_message": result[1],
+                        "is_live": bool(result[2]),
+                        "stream_id": result[3],
+                        "last_checked": result[4]
+                    }
+                return None
+        except Exception as e:
+            logger.error(f"取得實況主 {username} 資料時發生錯誤: {e}")
+            return None
+
+    def update_streamer_data(self, username, is_live=None, stream_id=None, last_checked=None):
+        """更新實況主資料"""
+        try:
+            with self.get_db_connection() as db:
+                cursor = db.cursor()
+                
+                # 先檢查是否存在
+                cursor.execute("""
+                    SELECT username FROM twitch_streamers WHERE username = ? AND guild_id = ?
+                """, (username, self.guild_id))
+                
+                if cursor.fetchone():
+                    # 更新現有記錄
+                    updates = []
+                    values = []
+                    
+                    if is_live is not None:
+                        updates.append("is_live = ?")
+                        values.append(1 if is_live else 0)
+                    
+                    if stream_id is not None:
+                        updates.append("stream_id = ?")
+                        values.append(stream_id)
+                    
+                    if last_checked is not None:
+                        updates.append("last_checked = ?")
+                        values.append(last_checked)
+                    
+                    if updates:
+                        values.extend([username, self.guild_id])
+                        cursor.execute(f"""
+                            UPDATE twitch_streamers 
+                            SET {', '.join(updates)}
+                            WHERE username = ? AND guild_id = ?
+                        """, values)
+                else:
+                    # 創建新記錄
+                    cursor.execute("""
+                        INSERT INTO twitch_streamers 
+                        (username, guild_id, discord_role, custom_message, is_live, stream_id, last_checked)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        username, self.guild_id, None, None,
+                        1 if is_live else 0, stream_id, last_checked
+                    ))
+                
+                db.commit()
+        except Exception as e:
+            logger.error(f"更新實況主 {username} 資料時發生錯誤: {e}")
+
+    def ensure_streamers_in_db(self):
+        """確保所有追蹤的實況主在資料庫中有記錄"""
+        streamers = self.get_streamers()
+        for username in streamers.keys():
+            if not self.get_streamer_data(username):
+                self.update_streamer_data(username, False, None, datetime.now().isoformat())
 
     def is_token_valid(self):
         """檢查 Token 是否有效"""
@@ -192,27 +326,30 @@ class Twitch(commands.Cog):
     @tasks.loop(seconds=60)
     async def check_streams(self):
         """定時檢查直播狀態"""
-        if not self.config.get("enabled", False) or not self.config.get("streamers", {}):
+        if not self.config.get("enabled", False):
+            return
+        
+        streamers = self.get_streamers()
+        if not streamers:
             return
         
         self.check_streams.change_interval(seconds=self.config.get("check_interval", 60))
-        logger.info(f"開始檢查 {len(self.config['streamers'])} 位實況主的直播狀態")
+        logger.info(f"開始檢查 {len(streamers)} 位實況主的直播狀態")
         
-        for username, settings in self.config["streamers"].items():
+        for username, settings in streamers.items():
             try:
                 user_id = await self.get_user_id(username)
                 if not user_id:
                     logger.warning(f"找不到用戶 {username} 的 ID")
-                    self.stream_data[username] = {"is_live": False, "last_checked": datetime.now().isoformat()}
+                    self.update_streamer_data(username, False, None, datetime.now().isoformat())
                     continue
                 
                 stream_info = await self.get_stream_info(user_id)
                 is_live = bool(stream_info)
                 
-                # 獲取之前的狀態 (在更新之前)
-                previous_data = self.stream_data.get(username, {})
-                was_live = previous_data.get("is_live", False)
-                previous_stream_id = previous_data.get("stream_id")
+                # 獲取之前的狀態
+                was_live = settings.get("is_live", False)
+                previous_stream_id = settings.get("stream_id")
                 
                 # 獲取當前直播的 ID
                 current_stream_id = stream_info.get("id") if stream_info else None
@@ -235,12 +372,8 @@ class Twitch(commands.Cog):
                     if was_live:
                         logger.info(f"⚫ {username} 結束直播")
                 
-                # 更新 stream_data (在判斷完成後)
-                self.stream_data[username] = {
-                    "is_live": is_live,
-                    "stream_id": current_stream_id,
-                    "last_checked": datetime.now().isoformat()
-                }
+                # 更新資料庫
+                self.update_streamer_data(username, is_live, current_stream_id, datetime.now().isoformat())
                 
                 # 發送通知
                 if should_notify:
@@ -249,10 +382,7 @@ class Twitch(commands.Cog):
                 await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"檢查 {username} 直播狀態時發生錯誤: {e}")
-                self.stream_data[username] = {"is_live": False, "last_checked": datetime.now().isoformat()}
-        
-        # 最後保存數據
-        self.save_stream_data()
+                self.update_streamer_data(username, False, None, datetime.now().isoformat())
 
     async def send_live_notification(self, username, stream_info, settings):
         """發送直播通知"""
@@ -365,19 +495,21 @@ class Twitch(commands.Cog):
         embed.add_field(name="API 狀態", value="✅ 正常" if self.is_token_valid() else "❌ 需要設定", inline=True)
         embed.add_field(name="通知頻道", value=channel.mention if channel else "未設定", inline=True)
         embed.add_field(name="檢查間隔", value=f"{self.config.get('check_interval', 60)} 秒", inline=True)
-        embed.add_field(name="追蹤實況主", value=f"{len(self.config.get('streamers', {}))} 位", inline=True)
+        
+        streamers = self.get_streamers()
+        embed.add_field(name="追蹤實況主", value=f"{len(streamers)} 位", inline=True)
         embed.add_field(name="提及角色", value=role.mention if role else "未設定", inline=True)
         embed.add_field(name="提及所有人", value="✅ 開啟" if self.config.get("mention_everyone", False) else "❌ 關閉", inline=True)
         
-        if self.config.get("streamers", {}):
+        if streamers:
             streamer_list = []
-            for username in self.config["streamers"].keys():
-                status = "🔴" if self.stream_data.get(username, {}).get("is_live", False) else "⚫"
+            for username, data in streamers.items():
+                status = "🔴" if data.get("is_live", False) else "⚫"
                 streamer_list.append(f"{status} {username}")
             
             embed.add_field(name="實況主列表", value="\n".join(streamer_list[:10]), inline=False)
-            if len(self.config["streamers"]) > 10:
-                embed.add_field(name="", value=f"... 還有 {len(self.config['streamers']) - 10} 位", inline=False)
+            if len(streamers) > 10:
+                embed.add_field(name="", value=f"... 還有 {len(streamers) - 10} 位", inline=False)
         
         embed.add_field(name="可用指令", value="""
         `!twitch setup` - 設定 API 金鑰
@@ -453,46 +585,82 @@ class Twitch(commands.Cog):
             await ctx.send(f"❌ 找不到 Twitch 用戶：{username}")
             return
         
-        self.config.setdefault("streamers", {})[username] = {
-            "discord_role": role.id if role else None,
-            "custom_message": None
-        }
-        self.save_config()
-        
-        if username not in self.stream_data:
-            self.stream_data[username] = {"is_live": False, "last_checked": datetime.now().isoformat()}
-            self.save_stream_data()
+        try:
+            with self.get_db_connection() as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    INSERT OR REPLACE INTO twitch_streamers 
+                    (username, guild_id, discord_role, custom_message, is_live, stream_id, last_checked)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    username, self.guild_id, role.id if role else None, None,
+                    0, None, datetime.now().isoformat()
+                ))
+                db.commit()
+        except Exception as e:
+            logger.error(f"添加實況主時發生錯誤: {e}")
+            await ctx.send(f"❌ 添加實況主時發生錯誤")
+            return
         
         role_text = f"，提及角色：{role.mention}" if role else ""
         await ctx.send(f"✅ 已添加實況主：{username}{role_text}")
+
 
     @twitch.command(name="remove")
     @commands.has_permissions(manage_guild=True)
     async def remove_streamer(self, ctx, username: str):
         """移除實況主"""
         username = username.lower()
+    
+        try:
+            with self.get_db_connection() as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    DELETE FROM twitch_streamers
+                    WHERE username = ? AND guild_id = ?
+             """, (username, self.guild_id))
+                db.commit()
         
-        if username in self.config.get("streamers", {}):
-            del self.config["streamers"][username]
-            self.save_config()
-            if username in self.stream_data:
-                del self.stream_data[username]
-                self.save_stream_data()
             await ctx.send(f"✅ 已移除實況主：{username}")
-        else:
-            await ctx.send(f"❌ 找不到實況主：{username}")
+        except Exception as e:
+            logger.error(f"移除實況主時發生錯誤: {e}")
+            await ctx.send(f"❌ 無法移除實況主：{username}")
+
 
     @twitch.command(name="list")
     @commands.has_permissions(manage_guild=True)
     async def list_streamers(self, ctx):
         """查看所有實況主"""
-        streamers = self.config.get("streamers", {})
-        if not streamers:
-            await ctx.send("❌ 尚未添加任何實況主")
-            return
-        
-        embed = discord.Embed(title="📺 追蹤的實況主", color=discord.Color.purple())
-        
+        try:
+            with self.get_db_connection() as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    SELECT username, discord_role, is_live
+                    FROM twitch_streamers
+                    WHERE guild_id = ?
+                """, (self.guild_id,))
+                streamers = cursor.fetchall()
+
+            if not streamers:
+                await ctx.send("❌ 尚未添加任何實況主")
+                return
+
+            embed = discord.Embed(title="📺 追蹤的實況主", color=discord.Color.purple())
+
+            for username, role_id, is_live in streamers:
+                status = "🔴 直播中" if is_live else "⚫ 離線"
+
+                role = ctx.guild.get_role(role_id) if role_id else None
+                role_text = f"\n角色：{role.mention}" if role else ""
+
+                embed.add_field(name=username, value=f"{status}{role_text}", inline=True)
+
+            await ctx.send(embed=embed)
+    
+        except Exception as e:
+            logger.error(f"列出實況主錯誤：{e}")
+            await ctx.send("❌ 列出實況主時發生錯誤")
+            
         for username in streamers.keys():
             # 使用當前檢查的狀態
             is_currently_live = self.stream_data.get(username, {}).get("is_live", False)
@@ -508,24 +676,44 @@ class Twitch(commands.Cog):
     async def test_notification(self, ctx, username: str):
         """測試通知"""
         username = username.lower()
-        
-        if username not in self.config.get("streamers", {}):
-            await ctx.send(f"❌ 尚未追蹤實況主：{username}")
-            return
-        
-        user_id = await self.get_user_id(username)
-        if not user_id:
-            await ctx.send(f"❌ 找不到 Twitch 用戶：{username}")
-            return
-        
-        stream_info = await self.get_stream_info(user_id)
-        if not stream_info:
-            await ctx.send(f"❌ {username} 目前沒有直播")
-            return
-        
-        settings = self.config["streamers"][username]
-        await self.send_live_notification(username, stream_info, settings)
-        await ctx.send(f"✅ 已發送 {username} 的測試通知")
+
+        try:
+            with self.get_db_connection() as db:
+                cursor = db.cursor()
+                cursor.execute("""
+                    SELECT channel_id, discord_role FROM twitch_streamers
+                    WHERE username = ? AND guild_id = ?
+                """, (username, self.guild_id))
+                row = cursor.fetchone()
+
+            if not row:
+                await ctx.send(f"❌ 尚未追蹤實況主：{username}")
+                return
+
+            channel_id, discord_role = row
+
+            user_id = await self.get_user_id(username)
+            if not user_id:
+                await ctx.send(f"❌ 找不到 Twitch 用戶：{username}")
+                return
+
+            stream_info = await self.get_stream_info(user_id)
+            if not stream_info:
+                await ctx.send(f"❌ {username} 目前沒有直播")
+                return
+
+            settings = {
+                "channel_id": channel_id,
+                "discord_role": discord_role
+            }
+
+            await self.send_live_notification(username, stream_info, settings)
+            await ctx.send(f"✅ 已發送 {username} 的測試通知")
+
+        except Exception as e:
+            logger.error(f"測試通知錯誤：{e}")
+            await ctx.send("❌ 發送通知時發生錯誤")
+
 
     @twitch.command(name="toggle")
     @commands.has_permissions(manage_guild=True)

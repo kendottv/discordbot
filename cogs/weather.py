@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timedelta
 import logging
 from dotenv import load_dotenv
+import sqlite3
 
 load_dotenv()
 
@@ -21,30 +22,39 @@ class WeatherCog(commands.Cog):
             logger.error("⚠️ 警告：WEATHER_API_KEY 未設定，無法獲取天氣資料！")
         else:
             logger.info(f"API Key 載入: {self.weather_api_key[:5]}...")
-
-        self.data_file = "data/weather_data.json"
-        self.weather_channels = self.load_weather_data()
+        
+        self.db = sqlite3.connect("bot_data.db", check_same_thread=False)
+        self.cursor = self.db.cursor()
+        self.cursor.execute("""
+            CREATE TABLE IF NOT EXISTS weather_channels (
+                guild_id INTEGER PRIMARY KEY,
+                channel_id INTEGER,
+                cities TEXT
+            )
+        """)
+        self.db.commit()
+        
         self.active_votes = {}  # 儲存投票訊息 ID 與選項
         self.daily_weather_update.start()
 
-    def load_weather_data(self):
-        os.makedirs("data", exist_ok=True)
-        try:
-            with open(self.data_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            logger.info("天氣資料文件未找到，創建新文件")
-            return {}
-        except json.JSONDecodeError as e:
-            logger.error(f"天氣資料解析失敗: {e}")
-            return {}
+    def get_weather_channels(self, guild_id):
+        """獲取天氣頻道設定"""
+        self.cursor.execute("SELECT * FROM weather_channels WHERE guild_id = ?", (guild_id,))
+        result = self.cursor.fetchone()
+        if result:
+            return {
+                "channel_id": result[1],
+                "cities": eval(result[2]) if result[2] else ["Taipei"]
+            }
+        return None
 
-    def save_weather_data(self):
-        try:
-            with open(self.data_file, 'w', encoding='utf-8') as f:
-                json.dump(self.weather_channels, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            logger.error(f"儲存天氣資料失敗: {e}")
+    def save_weather_channels(self, guild_id, data):
+        """儲存天氣頻道設定"""
+        self.cursor.execute("""
+            INSERT OR REPLACE INTO weather_channels (guild_id, channel_id, cities)
+            VALUES (?, ?, ?)
+        """, (guild_id, data["channel_id"], str(data["cities"])))
+        self.db.commit()
 
     async def fetch_weather_data(self, city="Taipei"):
         if not self.weather_api_key:
@@ -118,13 +128,15 @@ class WeatherCog(commands.Cog):
     @tasks.loop(time=datetime.strptime("00:00", "%H:%M").time())
     async def daily_weather_update(self):
         await self.bot.wait_until_ready()
-        if not self.weather_channels:
+        guild_ids = [row[0] for row in self.cursor.execute("SELECT guild_id FROM weather_channels")]
+        if not guild_ids:
             logger.info("沒有設定天氣頻道，跳過自動更新")
             return
         
         logger.info("開始執行每日天氣更新...")
-        for guild_id, channel_data in self.weather_channels.items():
+        for guild_id in guild_ids:
             try:
+                channel_data = self.get_weather_channels(guild_id)
                 channel_id = channel_data.get("channel_id")
                 cities = channel_data.get("cities", ["Taipei"])
                 channel = self.bot.get_channel(int(channel_id))
@@ -160,26 +172,25 @@ class WeatherCog(commands.Cog):
         """設定天氣預報頻道和多個城市（用逗號分隔，例如 Taipei,Tokyo）
         使用方式：!setweatherchannel #頻道 Taipei,Tokyo
         """
-        guild_id = str(ctx.guild.id)
+        guild_id = ctx.guild.id
         city_list = [city.strip() for city in cities.split(",")]
-        self.weather_channels[guild_id] = {"channel_id": str(channel.id), "cities": city_list}
-        self.save_weather_data()
+        self.save_weather_channels(guild_id, {"channel_id": channel.id, "cities": city_list})
         await ctx.send(f"✅ 已為 {ctx.guild.name} 設定天氣預報：\n📍 頻道：{channel.mention}\n🏙️ 城市：{', '.join(city_list)}")
 
     @commands.command(name="getweather")
     async def get_weather(self, ctx, *, city: str = None):
-        guild_id = str(ctx.guild.id)
+        guild_id = ctx.guild.id
         if city:
             query_city = city.strip()
-        elif guild_id in self.weather_channels:
-            query_city = self.weather_channels[guild_id].get("cities", ["Taipei"])[0]
+        elif self.get_weather_channels(guild_id):
+            query_city = self.get_weather_channels(guild_id).get("cities", ["Taipei"])[0]
         else:
             query_city = "Taipei"
         
-        if guild_id in self.weather_channels:
-            weather_channel_id = self.weather_channels[guild_id].get("channel_id")
-            if weather_channel_id and str(ctx.channel.id) != weather_channel_id:
-                weather_channel = self.bot.get_channel(int(weather_channel_id))
+        if self.get_weather_channels(guild_id):
+            weather_channel_id = self.get_weather_channels(guild_id).get("channel_id")
+            if weather_channel_id and ctx.channel.id != weather_channel_id:
+                weather_channel = self.bot.get_channel(weather_channel_id)
                 if weather_channel:
                     await ctx.send(f"❌ 請在 {weather_channel.mention} 頻道中使用此命令")
                     return
@@ -258,12 +269,12 @@ class WeatherCog(commands.Cog):
     @commands.command(name="refreshweather")
     @commands.has_permissions(administrator=True)
     async def refresh_weather(self, ctx):
-        guild_id = str(ctx.guild.id)
-        if guild_id not in self.weather_channels:
+        guild_id = ctx.guild.id
+        if not self.get_weather_channels(guild_id):
             await ctx.send("❌ 請先使用 `!setweatherchannel` 設定天氣頻道")
             return
         
-        channel_data = self.weather_channels[guild_id]
+        channel_data = self.get_weather_channels(guild_id)
         channel_id = channel_data.get("channel_id")
         cities = channel_data.get("cities", ["Taipei"])
         
@@ -288,12 +299,12 @@ class WeatherCog(commands.Cog):
 
     @commands.command(name="weatherinfo")
     async def weather_info(self, ctx):
-        guild_id = str(ctx.guild.id)
-        if guild_id not in self.weather_channels:
+        guild_id = ctx.guild.id
+        if not self.get_weather_channels(guild_id):
             await ctx.send("❌ 此伺服器尚未設定天氣頻道")
             return
         
-        channel_data = self.weather_channels[guild_id]
+        channel_data = self.get_weather_channels(guild_id)
         channel_id = channel_data.get("channel_id")
         cities = channel_data.get("cities", ["Taipei"])
         
@@ -310,10 +321,10 @@ class WeatherCog(commands.Cog):
     @commands.command(name="removeweather")
     @commands.has_permissions(administrator=True)
     async def remove_weather(self, ctx):
-        guild_id = str(ctx.guild.id)
-        if guild_id in self.weather_channels:
-            del self.weather_channels[guild_id]
-            self.save_weather_data()
+        guild_id = ctx.guild.id
+        if self.get_weather_channels(guild_id):
+            self.cursor.execute("DELETE FROM weather_channels WHERE guild_id = ?", (guild_id,))
+            self.db.commit()
             await ctx.send("✅ 已移除此伺服器的天氣設定")
         else:
             await ctx.send("❌ 此伺服器沒有設定天氣功能")
@@ -324,7 +335,11 @@ class WeatherCog(commands.Cog):
     @commands.Cog.listener()
     async def on_ready(self):
         logger.info("✅ Weather Cog 已載入")
-        logger.info(f"已設定 {len(self.weather_channels)} 個伺服器的天氣頻道")
+        logger.info(f"已設定 {len([row[0] for row in self.cursor.execute('SELECT guild_id FROM weather_channels')])} 個伺服器的天氣頻道")
+
+    def __del__(self):
+        """銷毀實例時關閉資料庫連線"""
+        self.db.close()
 
 async def setup(bot):
     await bot.add_cog(WeatherCog(bot))
