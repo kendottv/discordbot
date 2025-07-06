@@ -209,35 +209,49 @@ class Twitch(commands.Cog):
                 stream_info = await self.get_stream_info(user_id)
                 is_live = bool(stream_info)
                 
-                # 更新 stream_data
+                # 獲取之前的狀態 (在更新之前)
+                previous_data = self.stream_data.get(username, {})
+                was_live = previous_data.get("is_live", False)
+                previous_stream_id = previous_data.get("stream_id")
+                
+                # 獲取當前直播的 ID
                 current_stream_id = stream_info.get("id") if stream_info else None
-                self.stream_data[username] = {
-                    "is_live": is_live,
-                    "stream_id": current_stream_id,
-                    "last_checked": datetime.now().isoformat()
-                }
-                self.save_stream_data()
                 
-                # 獲取之前的狀態
-                was_live = self.stream_data[username].get("is_live", False)
-                previous_stream_id = self.stream_data[username].get("stream_id")
-                
+                # 判斷是否需要發送通知
+                should_notify = False
                 if is_live:
-                    if not was_live or (was_live and current_stream_id != previous_stream_id):
+                    if not was_live:
+                        # 從離線變為直播
                         logger.info(f"🔴 {username} 開始直播 (Stream ID: {current_stream_id})")
-                        await self.send_live_notification(username, stream_info, settings)
+                        should_notify = True
+                    elif was_live and current_stream_id != previous_stream_id:
+                        # 直播 ID 改變，表示開始了新的直播
+                        logger.info(f"🔴 {username} 開始新的直播 (Stream ID: {current_stream_id})")
+                        should_notify = True
                     elif was_live and current_stream_id == previous_stream_id:
+                        # 持續直播中
                         logger.debug(f"🔴 {username} 持續直播中 (Stream ID: {current_stream_id})")
                 else:
                     if was_live:
                         logger.info(f"⚫ {username} 結束直播")
                 
+                # 更新 stream_data (在判斷完成後)
+                self.stream_data[username] = {
+                    "is_live": is_live,
+                    "stream_id": current_stream_id,
+                    "last_checked": datetime.now().isoformat()
+                }
+                
+                # 發送通知
+                if should_notify:
+                    await self.send_live_notification(username, stream_info, settings)
+                
                 await asyncio.sleep(0.5)
             except Exception as e:
                 logger.error(f"檢查 {username} 直播狀態時發生錯誤: {e}")
                 self.stream_data[username] = {"is_live": False, "last_checked": datetime.now().isoformat()}
-                self.save_stream_data()
         
+        # 最後保存數據
         self.save_stream_data()
 
     async def send_live_notification(self, username, stream_info, settings):
