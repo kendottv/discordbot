@@ -2,6 +2,22 @@
 
 這是一個使用 Python 和 Discord.py 框架開發的多功能 Discord 機器人，包含多個 Cog 模組，提供直播通知、遊戲、等級系統、投票、歡迎訊息、YouTube 通知、管理功能等功能。以下是使用範例與說明，適合在 Windows 環境下開發。
 
+## 免責聲明
+
+本 Discord 機器人專案（以下簡稱「本專案」）由開發者提供，僅供個人學習和非商業用途使用。使用本專案即表示你同意以下條款：
+
+1. **API 和金鑰**：本專案需要使用第三方 API（如 YouTube API、Twitch API、Reddit API 等），相關 API 金鑰和 Secret Key 需由使用者自行申請並配置在 `.env` 文件中。開發者不提供任何 API 金鑰，對於因使用者未正確配置或違反 API 使用條款導致的問題概不負責。
+
+2. **第三方內容**：本專案可能通過 API 獲取第三方內容（如迷因圖片、天氣數據），這些內容的版權屬於原作者或提供者。使用者需自行遵守相關版權法規，並在分發或使用時標註來源。開發者對第三方內容的合法性不承擔任何責任。
+
+3. **使用風險**：本專案為開源軟件，按「原樣」提供。開發者不保證其穩定性、安全性或適用性，對於因使用本專案導致的任何損失（包括但不限於數據丟失、服務中斷或法律糾紛），概不負責。
+
+4. **修改與分發**：使用者可以根據所選許可證（例如 MIT 許可證）修改和分發本專案，但需保留原始版權聲明並遵守依賴庫的許可條件。
+
+如有疑問，請聯繫開發者或參考相關 API 的官方文件。使用本專案即表示你接受上述免責條款。
+
+最後更新時間：2025年7月6日
+
 ## 必要條件
 - Python 3.8+
 - 安裝依賴：
@@ -216,6 +232,22 @@
 # Discord Bot README
 
 This is a multifunctional Discord bot developed using Python and the Discord.py framework, featuring various Cog modules for live notifications, games, leveling systems, voting, welcome messages, YouTube notifications, moderation, and more. It is designed to be developed in a Windows environment . Below are usage examples and instructions.
+
+## Disclaimer
+
+This Discord bot project (hereinafter referred to as "the Project") is provided by the developer for personal learning and non-commercial use only. By using the Project, you agree to the following terms:
+
+1. **API and Keys**: The Project requires the use of third-party APIs (e.g., YouTube API, Twitch API, Reddit API), and the corresponding API keys and Secret Keys must be obtained and configured by the user in the `.env` file. The developer does not provide any API keys and is not responsible for issues arising from improper configuration or violation of API usage terms by the user.
+
+2. **Third-Party Content**: The Project may retrieve third-party content (e.g., meme images, weather data) via APIs. The copyright of such content belongs to the original authors or providers. Users must comply with relevant copyright laws and credit the source when distributing or using the content. The developer assumes no responsibility for the legality of third-party content.
+
+3. **Usage Risks**: This Project is open-source software provided "as is." The developer does not guarantee its stability, security, or suitability for any purpose. The developer is not liable for any losses (including but not limited to data loss, service interruptions, or legal disputes) resulting from the use of this Project.
+
+4. **Modification and Distribution**: Users may modify and distribute the Project according to the chosen license (e.g., MIT License), provided they retain the original copyright notice and comply with the license terms of dependent libraries.
+
+For any questions, please contact the developer or refer to the official documentation of the relevant APIs. Using this Project indicates your acceptance of the above disclaimer.
+
+Last updated: July 6, 2025
 
 ## Prerequisites
 - Python 3.8+
