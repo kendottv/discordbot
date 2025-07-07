@@ -1,0 +1,7 @@
+discord.py==2.3.2  # Discord 機器人框架，建議使用穩定版本
+aiohttp==3.9.3     # 異步 HTTP 請求，支援 API 調用
+matplotlib==3.8.2  # 數據視覺化（如投票結果圖表）
+numpy==1.26.2      # 數值計算，支援數據處理
+sqlite3==2.6.0     # SQLite 數據庫支持（通常內建，確保版本相容）
+python-dotenv==1.0.0  # 管理 .env 環境變數
+google-api-python-client==2.118.0  # YouTube API 支援
